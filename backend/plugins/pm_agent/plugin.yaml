@@ -1,0 +1,106 @@
+name: "项目管理Agent"
+version: "1.0.0"
+description: "基于OpenWebUI的科研项目管理智能应用"
+author: "PM Agent Team"
+license: "MIT"
+
+# 插件配置
+config:
+  database:
+    url: "${DATABASE_URL}"
+    pool_size: 10
+    max_overflow: 20
+  
+  auth:
+    secret_key: "${SECRET_KEY}"
+    algorithm: "${ALGORITHM}"
+    token_expire_minutes: 30
+  
+  notifications:
+    email_enabled: false
+    feishu_enabled: false
+
+# 工具函数定义
+tools:
+  - name: "create_task"
+    description: "创建新任务"
+    parameters:
+      type: "object"
+      properties:
+        title:
+          type: "string"
+          description: "任务标题"
+        description:
+          type: "string"
+          description: "任务描述"
+        assignee_id:
+          type: "string"
+          description: "负责人ID"
+        due_date:
+          type: "string"
+          format: "date-time"
+          description: "截止日期"
+        priority:
+          type: "string"
+          enum: ["low", "medium", "high"]
+          description: "任务优先级"
+      required: ["title", "assignee_id", "due_date", "priority"]
+  
+  - name: "get_tasks"
+    description: "获取任务列表"
+    parameters:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["pending", "in_progress", "completed", "overdue"]
+          description: "任务状态筛选"
+        assignee_id:
+          type: "string"
+          description: "负责人ID筛选"
+        limit:
+          type: "integer"
+          description: "返回数量限制"
+          default: 20
+        offset:
+          type: "integer"
+          description: "偏移量"
+          default: 0
+  
+  - name: "update_task"
+    description: "更新任务信息"
+    parameters:
+      type: "object"
+      properties:
+        task_id:
+          type: "string"
+          description: "任务ID"
+        title:
+          type: "string"
+          description: "任务标题"
+        description:
+          type: "string"
+          description: "任务描述"
+        status:
+          type: "string"
+          enum: ["pending", "in_progress", "completed", "overdue"]
+          description: "任务状态"
+        priority:
+          type: "string"
+          enum: ["low", "medium", "high"]
+          description: "任务优先级"
+      required: ["task_id"]
+
+# Webhook配置
+webhooks:
+  - name: "feishu_webhook"
+    description: "飞书机器人消息处理"
+    path: "/webhook/feishu"
+    methods: ["POST"]
+
+# 依赖项
+dependencies:
+  - "fastapi>=0.104.0"
+  - "psycopg2-binary>=2.9.0"
+  - "sqlalchemy>=2.0.0"
+  - "pydantic>=2.5.0"

@@ -1,0 +1,26 @@
+markdownExploder: true
+qa:
+  qaLocation: docs/qa
+prd:
+  prdFile: docs/prd.md
+  prdVersion: v4
+  prdSharded: true
+  prdShardedLocation: docs/prd
+  epicFilePattern: epic-{n}*.md
+architecture:
+  architectureFile: docs/architecture.md
+  architectureVersion: v4
+  architectureSharded: true
+  architectureShardedLocation: docs/architecture
+customTechnicalDocuments: null
+devLoadAlwaysFiles:
+  - docs/requirements/requirements.md
+  - docs/architecture/coding-standards.md
+  - docs/architecture/technical_architecture.md
+  - docs/architecture/tech-stack.md
+  - docs/architecture/project-architecture.md
+  - docs/architecture/openwebui_plugin_design.md
+  - docs/architecture/source-tree.md
+devDebugLog: .ai/debug-log.md
+devStoryLocation: docs/stories
+slashPrefix: BMad
