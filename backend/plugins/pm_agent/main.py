@@ -7,6 +7,7 @@ from config import settings
 from database import init_db
 from routes import router as task_router
 from auth_routes import router as auth_router
+from user_routes import router as user_router
 
 # 创建FastAPI应用实例
 app = FastAPI(
@@ -19,6 +20,7 @@ app = FastAPI(
 # 注册路由
 app.include_router(task_router, prefix="/api/pm_agent")
 app.include_router(auth_router, prefix="/api/pm_agent")
+app.include_router(user_router, prefix="/api/pm_agent")
 
 # 应用启动事件
 @app.on_event("startup")

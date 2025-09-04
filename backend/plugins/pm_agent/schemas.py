@@ -63,6 +63,7 @@ class UserUpdate(BaseModel):
     """更新用户模式"""
     username: Optional[str] = Field(None, min_length=3, max_length=50, description="用户名")
     email: Optional[EmailStr] = Field(None, max_length=100, description="邮箱")
+    password: Optional[str] = Field(None, min_length=6, description="密码")
     role: Optional[str] = Field(None, description="用户角色")
     status: Optional[str] = Field(None, description="用户状态")
 
@@ -75,6 +76,14 @@ class UserResponse(UserBase):
 
     class Config:
         from_attributes = True
+
+
+class UserListResponse(BaseModel):
+    """用户列表响应模式"""
+    users: list[UserResponse]
+    total: int
+    skip: int
+    limit: int
 
 
 class HealthResponse(BaseModel):
