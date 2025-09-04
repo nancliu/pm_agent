@@ -63,10 +63,15 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     if subject is None:
         raise credentials_exception
 
-    user = db.query(User).filter(User.id.cast(str) == subject).first()
-    if not user:
-        # 兼容sub为用户名
-        user = db.query(User).filter(User.username == subject).first()
+    # 优先按UUID匹配id，否则按用户名/邮箱匹配
+    user: Optional[User] = None
+    try:
+        from uuid import UUID
+        uid = UUID(subject)
+        user = db.query(User).filter(User.id == uid).first()
+    except Exception:
+        user = db.query(User).filter((User.username == subject) | (User.email == subject)).first()
+
     if not user:
         raise credentials_exception
 

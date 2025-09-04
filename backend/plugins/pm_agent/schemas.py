@@ -15,7 +15,7 @@ class TaskBase(BaseModel):
     description: Optional[str] = Field(None, max_length=500, description="任务描述")
     assignee_id: Optional[uuid.UUID] = Field(None, description="负责人ID")
     due_date: datetime = Field(..., description="截止日期")
-    priority: TaskPriority = Field(TaskPriority.MEDIUM, description="任务优先级")
+    priority: str = Field("medium", description="任务优先级")
 
 
 class TaskCreate(TaskBase):
@@ -29,15 +29,15 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=500, description="任务描述")
     assignee_id: Optional[uuid.UUID] = Field(None, description="负责人ID")
     due_date: Optional[datetime] = Field(None, description="截止日期")
-    priority: Optional[TaskPriority] = Field(None, description="任务优先级")
-    status: Optional[TaskStatus] = Field(None, description="任务状态")
+    priority: Optional[str] = Field(None, description="任务优先级")
+    status: Optional[str] = Field(None, description="任务状态")
 
 
 class TaskResponse(TaskBase):
     """任务响应模式"""
     id: uuid.UUID
-    status: TaskStatus
-    created_by: uuid.UUID
+    status: str
+    created_by: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
@@ -50,8 +50,8 @@ class UserBase(BaseModel):
     """用户基础模式"""
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
     email: EmailStr = Field(..., max_length=100, description="邮箱")
-    role: UserRole = Field(UserRole.MEMBER, description="用户角色")
-    status: UserStatus = Field(UserStatus.ACTIVE, description="用户状态")
+    role: str = Field("member", description="用户角色")
+    status: str = Field("active", description="用户状态")
 
 
 class UserCreate(UserBase):
@@ -63,8 +63,8 @@ class UserUpdate(BaseModel):
     """更新用户模式"""
     username: Optional[str] = Field(None, min_length=3, max_length=50, description="用户名")
     email: Optional[EmailStr] = Field(None, max_length=100, description="邮箱")
-    role: Optional[UserRole] = Field(None, description="用户角色")
-    status: Optional[UserStatus] = Field(None, description="用户状态")
+    role: Optional[str] = Field(None, description="用户角色")
+    status: Optional[str] = Field(None, description="用户状态")
 
 
 class UserResponse(UserBase):

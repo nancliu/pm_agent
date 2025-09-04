@@ -10,7 +10,7 @@ from backend.plugins.pm_agent.config import settings
 @pytest.fixture
 def base_url():
     """API基础URL"""
-    return f"http://{settings.HOST}:{settings.PORT}/api/pm_agent"
+    return f"http://127.0.0.1:8000/api/pm_agent"
 
 
 def test_health_check(base_url):

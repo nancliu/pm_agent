@@ -48,14 +48,14 @@ class User(Base):
     username = Column(String(50), unique=True, nullable=False)
     email = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    role = Column(Enum(UserRole), nullable=False, default=UserRole.MEMBER)
-    status = Column(Enum(UserStatus), nullable=False, default=UserStatus.ACTIVE)
+    role = Column(String(20), nullable=False, default=UserRole.MEMBER.value)
+    status = Column(String(20), nullable=False, default=UserStatus.ACTIVE.value)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     # 关系
     created_tasks = relationship("Task", foreign_keys="Task.created_by", back_populates="creator")
-    assigned_tasks = relationship("Task", foreign_keys="Task.assignee_id", back_populates="assigned_tasks")
+    assigned_tasks = relationship("Task", foreign_keys="Task.assignee_id", back_populates="assignee")
 
 
 class Task(Base):
@@ -67,8 +67,8 @@ class Task(Base):
     description = Column(Text)
     assignee_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     due_date = Column(DateTime(timezone=True), nullable=False)
-    priority = Column(Enum(TaskPriority), nullable=False, default=TaskPriority.MEDIUM)
-    status = Column(Enum(TaskStatus), nullable=False, default=TaskStatus.PENDING)
+    priority = Column(String(10), nullable=False, default=TaskPriority.MEDIUM.value)
+    status = Column(String(20), nullable=False, default=TaskStatus.PENDING.value)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

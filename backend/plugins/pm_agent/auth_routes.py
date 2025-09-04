@@ -23,22 +23,27 @@ async def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     if exists:
         raise HTTPException(status_code=400, detail="用户名或邮箱已存在")
 
-    user = User(
-        username=payload.username,
-        email=payload.email,
-        password_hash=hash_password(payload.password),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+    try:
+        user = User(
+            username=payload.username,
+            email=payload.email,
+            password_hash=hash_password(payload.password),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user
+    except Exception as e:
+        # 处理唯一约束等数据库错误
+        db.rollback()
+        raise HTTPException(status_code=400, detail="注册失败：用户名或邮箱已存在或数据无效")
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user: Optional[User] = db.query(User).filter(User.username == payload.username).first()
+    user: Optional[User] = db.query(User).filter(
+        (User.username == payload.username) | (User.email == payload.username)
+    ).first()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
 
