@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from database import get_db, check_db_health
-from models import User, Task, TaskPriority, TaskStatus, TaskHistory
-from schemas import TaskCreate, TaskUpdate, TaskResponse, TaskListResponse, TaskHistoryResponse, TaskStatusUpdate
+from models import User, Task, TaskPriority, TaskStatus, TaskHistory, TaskDeletionLog
+from schemas import TaskCreate, TaskUpdate, TaskResponse, TaskListResponse, TaskHistoryResponse, TaskStatusUpdate, TaskDeletionRequest, TaskDeletionLogResponse, DeletedTaskResponse
 from security import get_current_user
-from permissions import check_task_edit_permission, check_task_view_permission, is_manager_or_admin
+from permissions import check_task_edit_permission, check_task_view_permission, check_task_delete_permission, is_manager_or_admin
 from task_history_service import record_task_update, get_task_history
+from task_deletion_service import soft_delete_task, restore_task, get_deleted_tasks, get_deletion_logs
 from typing import List, Optional
 import uuid
 import logging
@@ -76,6 +77,61 @@ async def get_tasks(
     except Exception as e:
         logger.error(f"获取任务列表时发生错误: {e}")
         return TaskListResponse(tasks=[], total=0, skip=offset, limit=limit)
+
+
+@router.get("/tasks/deleted", response_model=List[DeletedTaskResponse])
+async def get_deleted_tasks_endpoint(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取已删除的任务列表"""
+    try:
+        # 只有管理员和项目经理可以查看已删除的任务
+        if not is_manager_or_admin(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只有管理员和项目经理可以查看已删除的任务"
+            )
+        
+        # 获取已删除的任务
+        deleted_tasks = get_deleted_tasks(db, limit, offset)
+        
+        # 获取删除日志信息
+        result = []
+        for task in deleted_tasks:
+            deletion_log = db.query(TaskDeletionLog).filter(
+                TaskDeletionLog.task_id == task.id
+            ).order_by(TaskDeletionLog.deleted_at.desc()).first()
+            
+            task_dict = {
+                "id": task.id,
+                "title": task.title,
+                "description": task.description,
+                "assignee_id": task.assignee_id,
+                "due_date": task.due_date,
+                "priority": task.priority,
+                "status": task.status,
+                "created_by": task.created_by,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+                "deleted_at": task.deleted_at,
+                "deletion_reason": deletion_log.deletion_reason if deletion_log else None,
+                "deleted_by": deletion_log.deleted_by if deletion_log else None
+            }
+            result.append(task_dict)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取已删除任务列表时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取已删除任务列表失败"
+        )
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
@@ -238,9 +294,10 @@ async def update_task(
         )
 
 
-@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/tasks/{task_id}", response_model=TaskDeletionLogResponse)
 async def delete_task(
-    task_id: uuid.UUID, 
+    task_id: uuid.UUID,
+    reason: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -250,15 +307,18 @@ async def delete_task(
         if not db_task:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
         
-        # 软删除：设置deleted_at字段
-        from datetime import datetime
-        db_task.deleted_at = datetime.utcnow()
+        # 检查删除权限
+        check_task_delete_permission(current_user, db_task, db)
         
-        db.add(db_task)
-        db.commit()
+        # 软删除任务
+        deletion_log = soft_delete_task(
+            db=db,
+            task=db_task,
+            deleted_by=current_user,
+            deletion_reason=reason
+        )
         
-        logger.info(f"用户 {current_user.username} 删除了任务: {db_task.title}")
-        return {"message": "任务删除成功"}
+        return deletion_log
         
     except HTTPException:
         raise
@@ -366,4 +426,78 @@ async def get_task_history_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="获取任务历史记录失败"
+        )
+
+
+@router.post("/tasks/{task_id}/restore", response_model=TaskResponse)
+async def restore_task_endpoint(
+    task_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """恢复已删除的任务"""
+    try:
+        # 查找已删除的任务
+        db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.isnot(None)).first()
+        if not db_task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="已删除的任务不存在")
+        
+        # 检查恢复权限（只有管理员和项目经理可以恢复任务）
+        if not is_manager_or_admin(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只有管理员和项目经理可以恢复任务"
+            )
+        
+        # 恢复任务
+        restored_task = restore_task(db, db_task, current_user)
+        
+        logger.info(f"用户 {current_user.username} 恢复了任务: {restored_task.title}")
+        return restored_task
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"恢复任务时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="恢复任务失败"
+        )
+
+
+@router.get("/tasks/{task_id}/deletion-logs", response_model=List[TaskDeletionLogResponse])
+async def get_task_deletion_logs(
+    task_id: uuid.UUID,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取任务的删除日志"""
+    try:
+        # 检查任务是否存在
+        db_task = db.query(Task).filter(Task.id == task_id).first()
+        if not db_task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+        
+        # 只有管理员和项目经理可以查看删除日志
+        if not is_manager_or_admin(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只有管理员和项目经理可以查看删除日志"
+            )
+        
+        # 获取删除日志
+        deletion_logs = get_deletion_logs(db, str(task_id), limit, offset)
+        
+        return deletion_logs
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务删除日志时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取任务删除日志失败"
         )

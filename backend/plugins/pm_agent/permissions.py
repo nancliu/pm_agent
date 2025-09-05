@@ -77,6 +77,44 @@ def check_task_view_permission(
     return True
 
 
+def check_task_delete_permission(
+    current_user: User, 
+    task: Task, 
+    db: Session
+) -> bool:
+    """
+    检查用户是否有权限删除任务
+    
+    Args:
+        current_user: 当前用户
+        task: 要删除的任务
+        db: 数据库会话
+        
+    Returns:
+        bool: 是否有权限删除
+        
+    Raises:
+        HTTPException: 权限不足时抛出异常
+    """
+    # 管理员可以删除所有任务
+    if current_user.role == UserRole.ADMIN.value:
+        return True
+    
+    # 项目经理可以删除所有任务
+    if current_user.role == UserRole.MANAGER.value:
+        return True
+    
+    # 任务创建者可以删除自己创建的任务
+    if current_user.id == task.created_by:
+        return True
+    
+    # 其他情况无权限
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="您没有权限删除此任务"
+    )
+
+
 def is_manager_or_admin(current_user: User) -> bool:
     """
     检查用户是否为管理员或项目经理

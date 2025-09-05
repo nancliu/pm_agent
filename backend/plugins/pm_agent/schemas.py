@@ -74,6 +74,43 @@ class TaskStatusUpdate(BaseModel):
     reason: Optional[str] = Field(None, max_length=500, description="状态变更原因")
 
 
+class TaskDeletionRequest(BaseModel):
+    """任务删除请求模式"""
+    reason: Optional[str] = Field(None, max_length=500, description="删除原因")
+
+
+class TaskDeletionLogResponse(BaseModel):
+    """任务删除日志响应模式"""
+    id: uuid.UUID
+    task_id: uuid.UUID
+    deleted_by: uuid.UUID
+    deletion_reason: Optional[str] = None
+    deleted_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class DeletedTaskResponse(BaseModel):
+    """已删除任务响应模式"""
+    id: uuid.UUID
+    title: str
+    description: Optional[str] = None
+    assignee_id: Optional[uuid.UUID] = None
+    due_date: datetime
+    priority: str
+    status: str
+    created_by: Optional[uuid.UUID] = None
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime
+    deletion_reason: Optional[str] = None
+    deleted_by: Optional[uuid.UUID] = None
+    
+    class Config:
+        from_attributes = True
+
+
 class UserBase(BaseModel):
     """用户基础模式"""
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
