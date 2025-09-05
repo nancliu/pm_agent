@@ -6,12 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from database import get_db, check_db_health
-from models import User, Task, TaskPriority, TaskStatus
-from schemas import TaskCreate, TaskUpdate, TaskResponse, TaskListResponse
+from models import User, Task, TaskPriority, TaskStatus, TaskHistory
+from schemas import TaskCreate, TaskUpdate, TaskResponse, TaskListResponse, TaskHistoryResponse, TaskStatusUpdate
 from security import get_current_user
+from permissions import check_task_edit_permission, check_task_view_permission, is_manager_or_admin
+from task_history_service import record_task_update, get_task_history
 from typing import List, Optional
 import uuid
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,9 @@ async def get_task(
         db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
         if not db_task:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+        
+        # 检查查看权限
+        check_task_view_permission(current_user, db_task, db)
         
         return db_task
     except HTTPException:
@@ -171,6 +177,9 @@ async def update_task(
         if not db_task:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
         
+        # 检查编辑权限
+        check_task_edit_permission(current_user, db_task, db)
+        
         # 验证负责人是否存在
         if task_update.assignee_id:
             assignee = db.query(User).filter(User.id == task_update.assignee_id).first()
@@ -194,14 +203,19 @@ async def update_task(
                 detail=f"无效的状态: {task_update.status}. 有效选项: {[s.value for s in TaskStatus]}"
             )
         
-        # 更新字段
+        # 记录更新前的数据
         update_data = task_update.model_dump(exclude_unset=True)
+        
+        # 更新字段
         for field, value in update_data.items():
             setattr(db_task, field, value)
         
         db.add(db_task)
         db.commit()
         db.refresh(db_task)
+        
+        # 记录历史变更
+        record_task_update(db, db_task, update_data, current_user)
         
         logger.info(f"用户 {current_user.username} 更新了任务: {db_task.title}")
         return db_task
@@ -254,4 +268,102 @@ async def delete_task(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="删除任务失败"
+        )
+
+
+@router.put("/tasks/{task_id}/status", response_model=TaskResponse)
+async def update_task_status(
+    task_id: uuid.UUID,
+    status_update: TaskStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """更新任务状态"""
+    try:
+        db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
+        if not db_task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+        
+        # 检查编辑权限
+        check_task_edit_permission(current_user, db_task, db)
+        
+        # 验证状态
+        if status_update.status not in [s.value for s in TaskStatus]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"无效的状态: {status_update.status}. 有效选项: {[s.value for s in TaskStatus]}"
+            )
+        
+        # 状态转换验证
+        old_status = db_task.status
+        new_status = status_update.status
+        
+        # 定义允许的状态转换
+        allowed_transitions = {
+            TaskStatus.PENDING.value: [TaskStatus.IN_PROGRESS.value, TaskStatus.BLOCKED.value, TaskStatus.OVERDUE.value],
+            TaskStatus.IN_PROGRESS.value: [TaskStatus.COMPLETED.value, TaskStatus.BLOCKED.value, TaskStatus.OVERDUE.value],
+            TaskStatus.BLOCKED.value: [TaskStatus.PENDING.value, TaskStatus.IN_PROGRESS.value, TaskStatus.OVERDUE.value],
+            TaskStatus.OVERDUE.value: [TaskStatus.IN_PROGRESS.value, TaskStatus.COMPLETED.value, TaskStatus.BLOCKED.value],
+            TaskStatus.COMPLETED.value: [TaskStatus.IN_PROGRESS.value, TaskStatus.BLOCKED.value]  # 已完成的任务可以重新开始
+        }
+        
+        if new_status not in allowed_transitions.get(old_status, []):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"不允许从状态 '{old_status}' 转换到 '{new_status}'"
+            )
+        
+        # 更新状态
+        db_task.status = new_status
+        db.add(db_task)
+        db.commit()
+        db.refresh(db_task)
+        
+        # 记录状态变更历史
+        record_task_update(db, db_task, {"status": new_status}, current_user)
+        
+        logger.info(f"用户 {current_user.username} 将任务 {db_task.title} 状态从 {old_status} 更新为 {new_status}")
+        return db_task
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新任务状态时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新任务状态失败"
+        )
+
+
+@router.get("/tasks/{task_id}/history", response_model=List[TaskHistoryResponse])
+async def get_task_history_endpoint(
+    task_id: uuid.UUID,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取任务历史记录"""
+    try:
+        # 检查任务是否存在
+        db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
+        if not db_task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+        
+        # 检查查看权限
+        check_task_view_permission(current_user, db_task, db)
+        
+        # 获取历史记录
+        history_records = get_task_history(db, str(task_id), limit, offset)
+        
+        return history_records
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务历史记录时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取任务历史记录失败"
         )

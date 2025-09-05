@@ -16,6 +16,7 @@ class UserRole(str, enum.Enum):
     ADMIN = "admin"
     MANAGER = "manager"
     MEMBER = "member"
+    GUEST = "guest"
 
 
 class UserStatus(str, enum.Enum):
@@ -37,6 +38,7 @@ class TaskStatus(str, enum.Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    BLOCKED = "blocked"
     OVERDUE = "overdue"
 
 

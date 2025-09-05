@@ -54,6 +54,26 @@ class TaskListResponse(BaseModel):
     limit: int
 
 
+class TaskHistoryResponse(BaseModel):
+    """任务历史记录响应模式"""
+    id: uuid.UUID
+    task_id: uuid.UUID
+    field_name: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    changed_by: uuid.UUID
+    changed_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class TaskStatusUpdate(BaseModel):
+    """任务状态更新模式"""
+    status: str = Field(..., description="任务状态")
+    reason: Optional[str] = Field(None, max_length=500, description="状态变更原因")
+
+
 class UserBase(BaseModel):
     """用户基础模式"""
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
