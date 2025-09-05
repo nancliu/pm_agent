@@ -3,7 +3,7 @@
 """
 
 from pydantic import BaseModel, Field, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from models import TaskPriority, TaskStatus, UserRole, UserStatus
 import uuid
@@ -44,6 +44,14 @@ class TaskResponse(TaskBase):
 
     class Config:
         from_attributes = True
+
+
+class TaskListResponse(BaseModel):
+    """任务列表响应模式"""
+    tasks: List[TaskResponse]
+    total: int
+    skip: int
+    limit: int
 
 
 class UserBase(BaseModel):

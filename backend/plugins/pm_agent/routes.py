@@ -2,12 +2,18 @@
 项目管理 Agent 路由模块
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from database import get_db, check_db_health
-from models import User, Task
-from schemas import TaskCreate, TaskUpdate, TaskResponse
-from typing import List
+from models import User, Task, TaskPriority, TaskStatus
+from schemas import TaskCreate, TaskUpdate, TaskResponse, TaskListResponse
+from security import get_current_user
+from typing import List, Optional
+import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 创建路由器
 router = APIRouter()
@@ -24,85 +30,228 @@ async def health_check():
     }
 
 
-@router.get("/tasks", response_model=List[TaskResponse])
+@router.get("/tasks", response_model=TaskListResponse)
 async def get_tasks(
-    status: str = None,
-    assignee_id: str = None,
+    status: Optional[str] = None,
+    assignee_id: Optional[uuid.UUID] = None,
+    priority: Optional[str] = None,
+    search: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """获取任务列表"""
     try:
-        query = db.query(Task)
+        query = db.query(Task).filter(Task.deleted_at.is_(None))
         
+        # 过滤条件
         if status:
             query = query.filter(Task.status == status)
         if assignee_id:
             query = query.filter(Task.assignee_id == assignee_id)
+        if priority:
+            query = query.filter(Task.priority == priority)
+        if search:
+            query = query.filter(
+                (Task.title.ilike(f"%{search}%")) |
+                (Task.description.ilike(f"%{search}%"))
+            )
         
+        # 获取总数
+        total = query.count()
+        
+        # 分页
         tasks = query.offset(offset).limit(limit).all()
-        return tasks
+        
+        return TaskListResponse(
+            tasks=tasks,
+            total=total,
+            skip=offset,
+            limit=limit
+        )
     except Exception as e:
-        # 返回空列表以保证服务可用性（日志记录留待接入logger）
-        return []
+        logger.error(f"获取任务列表时发生错误: {e}")
+        return TaskListResponse(tasks=[], total=0, skip=offset, limit=limit)
 
 
-@router.post("/tasks", response_model=TaskResponse)
-async def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    """创建新任务"""
-    try:
-        db_task = Task(**task.dict())
-        db.add(db_task)
-        db.commit()
-        db.refresh(db_task)
-        return db_task
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
-
-
-@router.put("/tasks/{task_id}", response_model=TaskResponse)
-async def update_task(
-    task_id: str,
-    task_update: TaskUpdate,
-    db: Session = Depends(get_db)
+@router.get("/tasks/{task_id}", response_model=TaskResponse)
+async def get_task(
+    task_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    """更新任务信息"""
+    """获取特定任务详情"""
     try:
-        db_task = db.query(Task).filter(Task.id == task_id).first()
+        db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
         if not db_task:
-            raise HTTPException(status_code=404, detail="任务不存在")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
         
-        for field, value in task_update.dict(exclude_unset=True).items():
-            setattr(db_task, field, value)
-        
-        db.commit()
-        db.refresh(db_task)
         return db_task
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"获取任务详情时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取任务详情失败"
+        )
+
+
+@router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_task(
+    task: TaskCreate, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """创建新任务"""
+    try:
+        # 验证负责人是否存在
+        if task.assignee_id:
+            assignee = db.query(User).filter(User.id == task.assignee_id).first()
+            if not assignee:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="指定的负责人不存在"
+                )
+        
+        # 验证优先级
+        if task.priority not in [p.value for p in TaskPriority]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"无效的优先级: {task.priority}. 有效选项: {[p.value for p in TaskPriority]}"
+            )
+        
+        # 创建任务
+        db_task = Task(
+            title=task.title,
+            description=task.description,
+            assignee_id=task.assignee_id,
+            due_date=task.due_date,
+            priority=task.priority,
+            status=TaskStatus.PENDING.value,
+            created_by=current_user.id
+        )
+        
+        db.add(db_task)
+        db.commit()
+        db.refresh(db_task)
+        
+        logger.info(f"用户 {current_user.username} 创建了任务: {db_task.title}")
+        return db_task
+        
+    except HTTPException:
+        raise
+    except IntegrityError as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新任务失败: {str(e)}")
+        logger.error(f"数据库完整性错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="任务创建失败，数据冲突"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"创建任务时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="创建任务失败"
+        )
 
 
-@router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str, db: Session = Depends(get_db)):
+@router.put("/tasks/{task_id}", response_model=TaskResponse)
+async def update_task(
+    task_id: uuid.UUID,
+    task_update: TaskUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """更新任务信息"""
+    try:
+        db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
+        if not db_task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+        
+        # 验证负责人是否存在
+        if task_update.assignee_id:
+            assignee = db.query(User).filter(User.id == task_update.assignee_id).first()
+            if not assignee:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="指定的负责人不存在"
+                )
+        
+        # 验证优先级
+        if task_update.priority and task_update.priority not in [p.value for p in TaskPriority]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"无效的优先级: {task_update.priority}. 有效选项: {[p.value for p in TaskPriority]}"
+            )
+        
+        # 验证状态
+        if task_update.status and task_update.status not in [s.value for s in TaskStatus]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"无效的状态: {task_update.status}. 有效选项: {[s.value for s in TaskStatus]}"
+            )
+        
+        # 更新字段
+        update_data = task_update.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(db_task, field, value)
+        
+        db.add(db_task)
+        db.commit()
+        db.refresh(db_task)
+        
+        logger.info(f"用户 {current_user.username} 更新了任务: {db_task.title}")
+        return db_task
+        
+    except HTTPException:
+        raise
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"数据库完整性错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="任务更新失败，数据冲突"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新任务时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新任务失败"
+        )
+
+
+@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(
+    task_id: uuid.UUID, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """删除任务（软删除）"""
     try:
-        db_task = db.query(Task).filter(Task.id == task_id).first()
+        db_task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
         if not db_task:
-            raise HTTPException(status_code=404, detail="任务不存在")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
         
         # 软删除：设置deleted_at字段
         from datetime import datetime
         db_task.deleted_at = datetime.utcnow()
         
+        db.add(db_task)
         db.commit()
+        
+        logger.info(f"用户 {current_user.username} 删除了任务: {db_task.title}")
         return {"message": "任务删除成功"}
+        
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除任务失败: {str(e)}")
+        logger.error(f"删除任务时发生错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="删除任务失败"
+        )
